@@ -1,0 +1,72 @@
+# Return Detective — MCP Toolbox Database Investigation Tools
+version: 1
+sources:
+  bigquery_source:
+    type: bigquery
+    project_id: ${PROJECT_ID}
+    dataset: ${BIGQUERY_DATASET}
+
+tools:
+  - name: get_case_candidate
+    description: Fetch details of a detected candidate anomaly case including slice key and sample complaints.
+    source: bigquery_source
+    sql: |
+      SELECT candidate_id, scenario_ref, slice_type, slice_key, store_id, first_seen,
+             anomaly_probability, complaints, refund_inr, sample_complaint_ids
+      FROM return_detective.case_candidates
+      WHERE candidate_id = :candidate_id
+
+  - name: query_batch_complaints
+    description: Fetch complaint rates and refund totals for a specific inventory batch across stores vs SKU baseline.
+    source: bigquery_source
+    sql: |
+      SELECT b.batch_id, oi.sku_id, b.supplier_id, count(c.complaint_id) as complaints, sum(c.refund_inr) as refund_inr
+      FROM return_detective.order_items oi
+      JOIN return_detective.batches b ON oi.batch_id = b.batch_id
+      LEFT JOIN return_detective.complaints c ON oi.order_item_id = c.order_item_id
+      WHERE b.batch_id = :batch_id
+      GROUP BY 1, 2, 3
+
+  - name: query_freezer_logs
+    description: Hourly temperature records and count of warm excursions above -15C for a store storage unit.
+    source: bigquery_source
+    sql: |
+      SELECT store_id, unit_id, log_date, log_hour, avg_temp_c, max_temp_c, warm_excursions
+      FROM return_detective.v_freezer_hourly
+      WHERE store_id = :store_id AND unit_id = :unit_id
+        AND log_date BETWEEN :start_date AND :end_date
+
+  - name: query_delivery_times
+    description: Complaint rate stratified by delivery transit duration bucket and ambient temperature bucket.
+    source: bigquery_source
+    sql: |
+      SELECT zone_id, minutes_pack_to_door, ambient_max_temp_c, count(*) as count
+      FROM return_detective.v_complaint_chain
+      WHERE store_id = :store_id AND zone_id = :zone_id
+      GROUP BY 1, 2, 3
+
+  - name: query_packer_stats
+    description: Complaint rate per packer compared to store benchmark.
+    source: bigquery_source
+    sql: |
+      SELECT packer_id, count(*) as items_packed, count(complaint_id) as complaints
+      FROM return_detective.v_complaint_chain
+      WHERE store_id = :store_id
+      GROUP BY 1
+
+  - name: query_customer_history
+    description: Total refund claims in last 90 days and total rupee refund amount for a customer account.
+    source: bigquery_source
+    sql: |
+      SELECT customer_id, count(*) as total_claims, sum(refund_inr) as total_refund_inr
+      FROM return_detective.complaints
+      WHERE customer_id = :customer_id
+      GROUP BY 1
+
+  - name: get_weather
+    description: Ambient daily maximum temperature and weather conditions for a store location.
+    source: bigquery_source
+    sql: |
+      SELECT store_id, date, max_temp_c, min_temp_c, humidity_pct
+      FROM return_detective.weather_daily
+      WHERE store_id = :store_id AND date = :log_date
